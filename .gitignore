@@ -77,4 +77,7 @@ sdist
 develop-eggs
 .installed.cfg
 lib
-lib64 
+lib64
+
+# Project files
+downloads/
