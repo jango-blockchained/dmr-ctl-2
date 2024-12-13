@@ -62,6 +62,69 @@ class ControllerUI(QMainWindow):
         device_group = QGroupBox("Device Selection")
         device_layout = QVBoxLayout()
         
+        # Add Receiver Controls Section
+        receiver_group = QGroupBox("Receiver Controls")
+        receiver_layout = QVBoxLayout()
+        
+        # IP Address input
+        ip_layout = QHBoxLayout()
+        ip_layout.addWidget(QLabel("IP Address:"))
+        self.receiver_ip_input = QLineEdit()
+        self.receiver_ip_input.setPlaceholderText("Enter receiver IP...")
+        connect_btn = QPushButton("Connect")
+        connect_btn.clicked.connect(self._connect_receiver)
+        ip_layout.addWidget(self.receiver_ip_input)
+        ip_layout.addWidget(connect_btn)
+        receiver_layout.addLayout(ip_layout)
+        
+        # Receiver Controls
+        receiver_controls = QHBoxLayout()
+        
+        # Power controls
+        power_layout = QVBoxLayout()
+        power_label = QLabel("Power")
+        power_layout.addWidget(power_label)
+        power_btns = QHBoxLayout()
+        receiver_on_btn = QPushButton("On")
+        receiver_on_btn.clicked.connect(lambda: self._set_receiver_power(True))
+        receiver_off_btn = QPushButton("Off")
+        receiver_off_btn.clicked.connect(lambda: self._set_receiver_power(False))
+        power_btns.addWidget(receiver_on_btn)
+        power_btns.addWidget(receiver_off_btn)
+        power_layout.addLayout(power_btns)
+        receiver_controls.addLayout(power_layout)
+        
+        # Volume control
+        volume_layout = QVBoxLayout()
+        volume_layout.addWidget(QLabel("Volume"))
+        self.receiver_volume = QSlider(Qt.Orientation.Horizontal)
+        self.receiver_volume.setRange(0, 100)
+        self.receiver_volume.setValue(50)
+        self.receiver_volume.valueChanged.connect(self._on_receiver_volume_change)
+        volume_layout.addWidget(self.receiver_volume)
+        receiver_controls.addLayout(volume_layout)
+        
+        # Input selection
+        input_layout = QVBoxLayout()
+        input_layout.addWidget(QLabel("Input"))
+        self.receiver_input = QComboBox()
+        self.receiver_input.currentTextChanged.connect(self._on_receiver_input_change)
+        input_layout.addWidget(self.receiver_input)
+        receiver_controls.addLayout(input_layout)
+        
+        # Mute control
+        mute_layout = QVBoxLayout()
+        mute_layout.addWidget(QLabel("Mute"))
+        self.receiver_mute = QPushButton("Mute")
+        self.receiver_mute.setCheckable(True)
+        self.receiver_mute.clicked.connect(self._on_receiver_mute_toggle)
+        mute_layout.addWidget(self.receiver_mute)
+        receiver_controls.addLayout(mute_layout)
+        
+        receiver_layout.addLayout(receiver_controls)
+        receiver_group.setLayout(receiver_layout)
+        device_layout.addWidget(receiver_group)
+        
         # Server Selection
         server_layout = QHBoxLayout()
         server_layout.addWidget(QLabel("Media Server:"))
@@ -70,9 +133,38 @@ class ControllerUI(QMainWindow):
         server_layout.addWidget(self.server_combo)
         device_layout.addLayout(server_layout)
         
-        # Add Media Browser Section
-        browser_group = QGroupBox("Media Browser")
+        # Add Content Source Selection
+        source_layout = QHBoxLayout()
+        source_layout.addWidget(QLabel("Content Source:"))
+        self.content_source_combo = QComboBox()
+        self.content_source_combo.addItems(["Media Server", "Local File", "Soundcloud/Youtube"])
+        self.content_source_combo.currentTextChanged.connect(self._on_content_source_changed)
+        source_layout.addWidget(self.content_source_combo)
+        device_layout.addLayout(source_layout)
+        
+        # Add Media Browser Section with stacked inputs
+        browser_group = QGroupBox("Content Browser")
         browser_layout = QVBoxLayout()
+        
+        # Create input widgets for different sources
+        self.file_input = QPushButton("Browse Files")
+        self.file_input.clicked.connect(self.media_controller.browse_local_file)
+        self.file_input.hide()
+        
+        self.url_input_layout = QHBoxLayout()
+        self.url_input = QLineEdit()
+        self.url_input.setPlaceholderText("Enter Soundcloud/Youtube URL...")
+        self.url_play_btn = QPushButton("Play")
+        self.url_play_btn.clicked.connect(self.play_url)
+        self.url_input_layout.addWidget(self.url_input)
+        self.url_input_layout.addWidget(self.url_play_btn)
+        self.url_widget = QWidget()
+        self.url_widget.setLayout(self.url_input_layout)
+        self.url_widget.hide()
+        
+        # Add inputs to browser layout
+        browser_layout.addWidget(self.file_input)
+        browser_layout.addWidget(self.url_widget)
         
         # Path navigation
         nav_layout = QHBoxLayout()
@@ -193,28 +285,6 @@ class ControllerUI(QMainWindow):
         controls_group.setLayout(controls_layout)
         self.main_layout.addWidget(controls_group)
         
-        # Local Playback Section
-        local_group = QGroupBox("Local Playback")
-        local_layout = QVBoxLayout()
-        
-        browse_btn = QPushButton("Browse Files")
-        browse_btn.clicked.connect(self.media_controller.browse_local_file)
-        local_layout.addWidget(browse_btn)
-        
-        soundcloud_layout = QHBoxLayout()
-        soundcloud_layout.addWidget(QLabel("Soundcloud URL:"))
-        self.soundcloud_entry = QLineEdit()
-        self.soundcloud_entry.setPlaceholderText("Enter Soundcloud URL...")
-        soundcloud_layout.addWidget(self.soundcloud_entry)
-        self.soundcloud_entry.textChanged.connect(lambda: self.soundcloud_entry.setText(self.soundcloud_entry.text().rstrip()))
-        soundcloud_btn = QPushButton("Play Soundcloud")
-        soundcloud_btn.clicked.connect(self.play_soundcloud)
-        soundcloud_layout.addWidget(soundcloud_btn)
-        local_layout.addLayout(soundcloud_layout)
-
-        local_group.setLayout(local_layout)
-        self.main_layout.addWidget(local_group)
-        
         # Initialize status bar
         self.status_bar = self.statusBar()
         if self.status_bar is None:
@@ -322,14 +392,24 @@ class ControllerUI(QMainWindow):
                     self.state_label.setText("STOPPED")
                     
                 elif action == "update_status":
-                    self.status_bar.showMessage(data)
+                    if self.status_bar is not None:
+                        self.status_bar.showMessage(data)
+                    else:
+                        logger.warning(f"Status bar not available to show message: {data}")
                     
                 elif action == "show_progress":
-                    self.progress_bar.setRange(0, 0)  # Indeterminate progress
-                    self.progress_bar.show()
+                    if self.progress_bar is not None:
+                        self.progress_bar.setRange(0, 0)  # Indeterminate progress
+                        self.progress_bar.show()
+                    else:
+                        logger.warning("Progress bar not available to show progress")
                     
                 elif action == "hide_progress":
-                    self.progress_bar.hide()
+                    if self.progress_bar is not None:
+                        self.progress_bar.hide()
+                        self.progress_bar.setRange(0, 100)  # Reset to determinate
+                    else:
+                        logger.warning("Progress bar not available to hide")
                     
                 elif action == "update_input_sources":
                     self.source_combo.clear()
@@ -564,51 +644,21 @@ class ControllerUI(QMainWindow):
         try:
             logger.info("Starting device discovery...")
             
-            # Run discovery
-            servers = discover_media_servers()
-            renderers = discover_media_renderers()
-            
-            # Log discovered devices
-            logger.info(f"Found {len(servers)} media servers and {len(renderers)} renderers")
-            
-            for server in servers:
-                if isinstance(server, dict):
-                    logger.info(f"Server (dict): {server}")
-                else:
-                    try:
-                        logger.info(f"Server (obj): name='{server.friendly_name}', type='{server.device_type}', location='{server.location}'")
-                        logger.info(f"  Services: {[s.service_type for s in server.services]}")
-                    except Exception as e:
-                        logger.error(f"Error logging server info: {e}", exc_info=True)
-            
-            for renderer in renderers:
-                if isinstance(renderer, dict):
-                    logger.info(f"Renderer (dict): {renderer}")
-                else:
-                    try:
-                        logger.info(f"Renderer (obj): name='{renderer.friendly_name}', type='{renderer.device_type}', location='{renderer.location}'")
-                        logger.info(f"  Services: {[s.service_type for s in renderer.services]}")
-                    except Exception as e:
-                        logger.error(f"Error logging renderer info: {e}", exc_info=True)
-            
-            # Convert devices to dictionaries for storage
+            # Clear existing devices
             server_dicts: List[DeviceDict] = []
+            renderer_dicts: List[DeviceDict] = []
+            
+            # Discover all devices first
+            self.media_controller.discovery.discover_devices()
+            
+            # Get discovered devices
+            servers = self.media_controller.discovery.get_media_servers()
+            renderers = self.media_controller.discovery.get_media_renderers()
+            
+            # Convert servers to dicts
             for server in servers:
                 try:
-                    if isinstance(server, dict):
-                        # Ensure the dictionary has all required fields
-                        device_dict = {
-                            'friendly_name': str(server.get('friendly_name', '')),
-                            'location': str(server.get('location', '')),
-                            'device_type': str(server.get('device_type', 'urn:schemas-upnp-org:device:MediaServer:1'))
-                        }
-                    else:
-                        # Convert object attributes to dictionary
-                        device_dict = {
-                            'friendly_name': str(getattr(server, 'friendly_name', '')),
-                            'location': str(getattr(server, 'location', '')),
-                            'device_type': str(getattr(server, 'device_type', 'urn:schemas-upnp-org:device:MediaServer:1'))
-                        }
+                    device_dict = self._convert_device_to_dict(server)
                     
                     # Log the conversion
                     logger.debug(f"Converting server to dict: {device_dict}")
@@ -627,51 +677,30 @@ class ControllerUI(QMainWindow):
                         logger.warning(f"Skipping invalid server: {device_dict}")
                 except Exception as e:
                     logger.error(f"Error converting server to dict: {e}", exc_info=True)
+                    continue
             
-            renderer_dicts: List[DeviceDict] = []
-            for renderer in renderers:
-                try:
-                    if isinstance(renderer, dict):
-                        # Ensure the dictionary has all required fields
-                        device_dict = {
-                            'friendly_name': str(renderer.get('friendly_name', '')),
-                            'location': str(renderer.get('location', '')),
-                            'device_type': str(renderer.get('device_type', 'urn:schemas-upnp-org:device:MediaRenderer:1'))
-                        }
-                    else:
-                        # Convert object attributes to dictionary
-                        device_dict = {
-                            'friendly_name': str(getattr(renderer, 'friendly_name', '')),
-                            'location': str(getattr(renderer, 'location', '')),
-                            'device_type': str(getattr(renderer, 'device_type', 'urn:schemas-upnp-org:device:MediaRenderer:1'))
-                        }
-                    
-                    # Log the conversion
-                    logger.debug(f"Converting renderer to dict: {device_dict}")
-                    
-                    # Only add if we have valid data
-                    if device_dict['friendly_name'] and device_dict['location']:
-                        renderer_dicts.append(device_dict)
-                        logger.info(f"Added renderer: {device_dict['friendly_name']}")
-                    else:
-                        logger.warning(f"Skipping invalid renderer: {device_dict}")
-                except Exception as e:
-                    logger.error(f"Error converting renderer to dict: {e}", exc_info=True)
+            # Update UI with discovered devices
+            self._update_device_lists(server_dicts, renderer_dicts)
             
-            # Save to storage only if we have valid devices
+            # Save discovered devices
             if server_dicts or renderer_dicts:
                 if self.device_storage.save_devices(server_dicts, renderer_dicts):
-                    self.update_queue.put(("discovery_complete", (servers, renderers)))
-                    logger.info(f"Successfully saved {len(server_dicts)} servers and {len(renderer_dicts)} renderers")
+                    logger.info(f"Saved {len(server_dicts)} servers and {len(renderer_dicts)} renderers to storage")
                 else:
-                    self.update_queue.put(("discovery_error", "Failed to save discovered devices"))
+                    logger.error("Failed to save devices to storage")
+            
+            # Update status
+            if not server_dicts and not renderer_dicts:
+                self._update_status_safe("No devices found")
             else:
-                logger.warning("No valid devices found during discovery")
-                self.update_queue.put(("discovery_error", "No valid devices found"))
+                self._update_status_safe(f"Found {len(server_dicts)} servers and {len(renderer_dicts)} renderers")
                 
         except Exception as e:
             logger.error(f"Error during discovery: {e}", exc_info=True)
             self.update_queue.put(("discovery_error", str(e)))
+        finally:
+            # Hide progress bar
+            self.update_queue.put(("hide_progress", None))
 
     def _load_saved_devices(self) -> Tuple[List[DeviceDict], List[DeviceDict]]:
         """Load devices from storage on startup."""
@@ -878,10 +907,14 @@ class ControllerUI(QMainWindow):
                 list_item = QListWidgetItem()
                 
                 # Set icon based on type
-                if item.get("type") == "container":
-                    list_item.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DirIcon))
+                style = self.style()
+                if style is not None:
+                    if item.get("type") == "container":
+                        list_item.setIcon(style.standardIcon(QStyle.StandardPixmap.SP_DirIcon))
+                    else:
+                        list_item.setIcon(style.standardIcon(QStyle.StandardPixmap.SP_FileIcon))
                 else:
-                    list_item.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_FileIcon))
+                    logger.warning("Style not available for setting icons")
                 
                 # Set item text and data
                 list_item.setText(item.get("title", "Unknown"))
@@ -931,9 +964,12 @@ class ControllerUI(QMainWindow):
             server_dicts: List[DeviceDict] = []
             renderer_dicts: List[DeviceDict] = []
             
-            # Discover devices
-            servers = self.media_controller.discovery.discover_media_servers()
-            renderers = self.media_controller.discovery.discover_media_renderers()
+            # Discover all devices first
+            self.media_controller.discovery.discover_devices()
+            
+            # Get discovered devices
+            servers = self.media_controller.discovery.get_media_servers()
+            renderers = self.media_controller.discovery.get_media_renderers()
             
             # Convert servers to dicts
             for server in servers:
@@ -957,3 +993,141 @@ class ControllerUI(QMainWindow):
                         logger.warning(f"Skipping invalid server: {device_dict}")
                 except Exception as e:
                     logger.error(f"Error converting server to dict: {e}", exc_info=True)
+                    continue
+            
+            # Update UI with discovered devices
+            self._update_device_lists(server_dicts, renderer_dicts)
+            
+            # Save discovered devices
+            if server_dicts or renderer_dicts:
+                if self.device_storage.save_devices(server_dicts, renderer_dicts):
+                    logger.info(f"Saved {len(server_dicts)} servers and {len(renderer_dicts)} renderers to storage")
+                else:
+                    logger.error("Failed to save devices to storage")
+            
+            # Update status
+            if not server_dicts and not renderer_dicts:
+                self._update_status_safe("No devices found")
+            else:
+                self._update_status_safe(f"Found {len(server_dicts)} servers and {len(renderer_dicts)} renderers")
+                
+        except Exception as e:
+            error_msg = f"Error during device discovery: {e}"
+            logger.error(error_msg, exc_info=True)
+            self._update_status_safe(error_msg)
+        finally:
+            # Hide progress bar
+            self.update_queue.put(("hide_progress", None))
+
+    def _on_content_source_changed(self, source: str):
+        """Handle content source selection change."""
+        # Hide all inputs first
+        self.file_input.hide()
+        self.url_widget.hide()
+        self.content_list.hide()
+        self.path_label.hide()
+        
+        # Show relevant inputs based on selection
+        if source == "Media Server":
+            self.content_list.show()
+            self.path_label.show()
+            self._browse_container(self.current_container_id)
+        elif source == "Local File":
+            self.file_input.show()
+        elif source == "Soundcloud/Youtube":
+            self.url_widget.show()
+
+    def play_url(self):
+        """Handle URL playback."""
+        url = self.url_input.text()
+        if not url:
+            self._update_status_safe("Please enter a URL")
+            return
+        
+        if "soundcloud.com" in url.lower():
+            self.media_controller.play_soundcloud(url)
+        else:
+            # Handle YouTube URLs or direct media URLs
+            self.url_entry.setText(url)
+            self._play()
+
+    def _connect_receiver(self):
+        """Connect to receiver using IP address."""
+        ip_address = self.receiver_ip_input.text().strip()
+        if not ip_address:
+            self._update_status_safe("Please enter an IP address")
+            return
+            
+        try:
+            if self.media_controller.set_renderer({'location': f'http://{ip_address}', 'manufacturer': 'Yamaha'}):
+                self._update_status_safe(f"Connected to receiver at {ip_address}")
+                self._update_receiver_controls()
+            else:
+                self._update_status_safe("Failed to connect to receiver")
+        except Exception as e:
+            error_msg = f"Error connecting to receiver: {e}"
+            logger.error(error_msg, exc_info=True)
+            self._update_status_safe(error_msg)
+
+    def _update_receiver_controls(self):
+        """Update receiver controls with current state."""
+        if self.media_controller.receiver:
+            try:
+                status = self.media_controller.receiver.get_status()
+                
+                # Update power state
+                power = status.get('power', False)
+                self._update_status_safe("Power: " + ("On" if power else "Off"))
+                
+                # Update volume
+                volume = status.get('volume', 0)
+                self.receiver_volume.setValue(volume)
+                
+                # Update input source
+                current_input = status.get('input', '')
+                input_list = self.media_controller.receiver.get_input_list()
+                self.receiver_input.clear()
+                self.receiver_input.addItems(input_list)
+                if current_input in input_list:
+                    self.receiver_input.setCurrentText(current_input)
+                
+                # Update mute state
+                mute = status.get('mute', False)
+                self.receiver_mute.setChecked(mute)
+                
+            except Exception as e:
+                logger.error(f"Error updating receiver controls: {e}")
+                self._update_status_safe("Error updating receiver status")
+
+    def _set_receiver_power(self, power: bool):
+        """Set receiver power state."""
+        if self.media_controller.receiver:
+            if self.media_controller.receiver.set_power(power):
+                self._update_status_safe(f"Power {'On' if power else 'Off'}")
+                self._update_receiver_controls()
+            else:
+                self._update_status_safe("Failed to set power state")
+
+    def _on_receiver_volume_change(self, value: int):
+        """Handle volume slider changes."""
+        if self.media_controller.receiver:
+            if self.media_controller.receiver.set_volume(value):
+                self._update_status_safe(f"Volume: {value}")
+            else:
+                self._update_status_safe("Failed to set volume")
+
+    def _on_receiver_input_change(self, input_source: str):
+        """Handle input source changes."""
+        if input_source and self.media_controller.receiver:
+            if self.media_controller.receiver.set_input(input_source):
+                self._update_status_safe(f"Input: {input_source}")
+            else:
+                self._update_status_safe("Failed to set input source")
+
+    def _on_receiver_mute_toggle(self, checked: bool):
+        """Handle mute button toggle."""
+        if self.media_controller.receiver:
+            if self.media_controller.receiver.set_mute(checked):
+                self._update_status_safe(f"{'Muted' if checked else 'Unmuted'}")
+            else:
+                self._update_status_safe("Failed to set mute state")
