@@ -1,0 +1,6 @@
+upnpclient>=1.0.0
+requests>=2.31.0
+PyQt6>=6.6.1
+python-vlc>=3.0.20000
+yt-dlp>=2023.12.30
+appdirs>=1.4.4
