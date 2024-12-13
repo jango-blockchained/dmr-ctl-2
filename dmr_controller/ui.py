@@ -6,7 +6,7 @@ from PyQt6.QtWidgets import (  # type: ignore
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QComboBox, QPushButton, QFrame, QLineEdit, QSlider,
     QProgressBar, QGroupBox, QListWidget, QListWidgetItem, QStyle,
-    QStatusBar
+    QStatusBar, QGridLayout
 )
 from PyQt6.QtCore import Qt, QTimer, pyqtSlot  # type: ignore
 from PyQt6.QtGui import QIcon  # type: ignore
@@ -62,7 +62,20 @@ class ControllerUI(QMainWindow):
         device_group = QGroupBox("Device Selection")
         device_layout = QVBoxLayout()
         
-        # Add Receiver Controls Section
+        # Renderer Selection with Discovery
+        renderer_layout = QHBoxLayout()
+        renderer_layout.addWidget(QLabel("Media Renderer:"))
+        self.renderer_combo = QComboBox()
+        self.renderer_combo.setToolTip("Select a media renderer device")
+        self.renderer_combo.currentTextChanged.connect(self._on_renderer_selected)
+        renderer_layout.addWidget(self.renderer_combo)
+        refresh_btn = QPushButton("⟳ Discover")
+        refresh_btn.setToolTip("Search for available media renderers")
+        refresh_btn.clicked.connect(self._start_discovery)
+        renderer_layout.addWidget(refresh_btn)
+        device_layout.addLayout(renderer_layout)
+        
+        # Receiver Controls Section
         receiver_group = QGroupBox("Receiver Controls")
         receiver_layout = QVBoxLayout()
         
@@ -71,90 +84,103 @@ class ControllerUI(QMainWindow):
         ip_layout.addWidget(QLabel("IP Address:"))
         self.receiver_ip_input = QLineEdit()
         self.receiver_ip_input.setPlaceholderText("Enter receiver IP...")
+        self.receiver_ip_input.setToolTip("Enter the IP address of your receiver")
         connect_btn = QPushButton("Connect")
+        connect_btn.setToolTip("Connect to the receiver")
         connect_btn.clicked.connect(self._connect_receiver)
         ip_layout.addWidget(self.receiver_ip_input)
         ip_layout.addWidget(connect_btn)
         receiver_layout.addLayout(ip_layout)
         
-        # Receiver Controls
-        receiver_controls = QHBoxLayout()
+        # Receiver Controls Grid
+        receiver_controls = QGridLayout()
         
         # Power controls
-        power_layout = QVBoxLayout()
         power_label = QLabel("Power")
-        power_layout.addWidget(power_label)
+        receiver_controls.addWidget(power_label, 0, 0)
         power_btns = QHBoxLayout()
         receiver_on_btn = QPushButton("On")
+        receiver_on_btn.setToolTip("Turn receiver on")
         receiver_on_btn.clicked.connect(lambda: self._set_receiver_power(True))
         receiver_off_btn = QPushButton("Off")
+        receiver_off_btn.setToolTip("Turn receiver off")
         receiver_off_btn.clicked.connect(lambda: self._set_receiver_power(False))
         power_btns.addWidget(receiver_on_btn)
         power_btns.addWidget(receiver_off_btn)
-        power_layout.addLayout(power_btns)
-        receiver_controls.addLayout(power_layout)
+        power_widget = QWidget()
+        power_widget.setLayout(power_btns)
+        receiver_controls.addWidget(power_widget, 0, 1)
         
         # Volume control
-        volume_layout = QVBoxLayout()
-        volume_layout.addWidget(QLabel("Volume"))
+        volume_label = QLabel("Volume")
+        receiver_controls.addWidget(volume_label, 1, 0)
         self.receiver_volume = QSlider(Qt.Orientation.Horizontal)
+        self.receiver_volume.setToolTip("Adjust volume")
         self.receiver_volume.setRange(0, 100)
         self.receiver_volume.setValue(50)
         self.receiver_volume.valueChanged.connect(self._on_receiver_volume_change)
-        volume_layout.addWidget(self.receiver_volume)
-        receiver_controls.addLayout(volume_layout)
+        receiver_controls.addWidget(self.receiver_volume, 1, 1)
         
         # Input selection
-        input_layout = QVBoxLayout()
-        input_layout.addWidget(QLabel("Input"))
+        input_label = QLabel("Input")
+        receiver_controls.addWidget(input_label, 2, 0)
         self.receiver_input = QComboBox()
+        self.receiver_input.setToolTip("Select input source")
         self.receiver_input.currentTextChanged.connect(self._on_receiver_input_change)
-        input_layout.addWidget(self.receiver_input)
-        receiver_controls.addLayout(input_layout)
+        receiver_controls.addWidget(self.receiver_input, 2, 1)
         
         # Mute control
-        mute_layout = QVBoxLayout()
-        mute_layout.addWidget(QLabel("Mute"))
+        mute_label = QLabel("Mute")
+        receiver_controls.addWidget(mute_label, 3, 0)
         self.receiver_mute = QPushButton("Mute")
+        self.receiver_mute.setToolTip("Toggle mute")
         self.receiver_mute.setCheckable(True)
         self.receiver_mute.clicked.connect(self._on_receiver_mute_toggle)
-        mute_layout.addWidget(self.receiver_mute)
-        receiver_controls.addLayout(mute_layout)
+        receiver_controls.addWidget(self.receiver_mute, 3, 1)
         
         receiver_layout.addLayout(receiver_controls)
         receiver_group.setLayout(receiver_layout)
         device_layout.addWidget(receiver_group)
         
-        # Server Selection
-        server_layout = QHBoxLayout()
-        server_layout.addWidget(QLabel("Media Server:"))
-        self.server_combo = QComboBox()
-        self.server_combo.currentTextChanged.connect(self.on_server_selected)
-        server_layout.addWidget(self.server_combo)
-        device_layout.addLayout(server_layout)
+        # Media Source Section
+        source_group = QGroupBox("Media Source")
+        source_layout = QVBoxLayout()
         
-        # Add Content Source Selection
-        source_layout = QHBoxLayout()
-        source_layout.addWidget(QLabel("Content Source:"))
+        # Source Selection Grid
+        source_grid = QGridLayout()
+        
+        # Server Selection
+        source_grid.addWidget(QLabel("Media Server:"), 0, 0)
+        self.server_combo = QComboBox()
+        self.server_combo.setToolTip("Select a media server")
+        self.server_combo.currentTextChanged.connect(self.on_server_selected)
+        source_grid.addWidget(self.server_combo, 0, 1)
+        
+        # Content Source Selection
+        source_grid.addWidget(QLabel("Content Source:"), 1, 0)
         self.content_source_combo = QComboBox()
+        self.content_source_combo.setToolTip("Select content source type")
         self.content_source_combo.addItems(["Media Server", "Local File", "Soundcloud/Youtube"])
         self.content_source_combo.currentTextChanged.connect(self._on_content_source_changed)
-        source_layout.addWidget(self.content_source_combo)
-        device_layout.addLayout(source_layout)
+        source_grid.addWidget(self.content_source_combo, 1, 1)
         
-        # Add Media Browser Section with stacked inputs
-        browser_group = QGroupBox("Content Browser")
+        source_layout.addLayout(source_grid)
+        
+        # Content Browser
         browser_layout = QVBoxLayout()
         
         # Create input widgets for different sources
         self.file_input = QPushButton("Browse Files")
+        self.file_input.setToolTip("Browse for local media files")
         self.file_input.clicked.connect(self.media_controller.browse_local_file)
         self.file_input.hide()
         
         self.url_input_layout = QHBoxLayout()
         self.url_input = QLineEdit()
         self.url_input.setPlaceholderText("Enter Soundcloud/Youtube URL...")
+        self.url_input.setToolTip("Enter URL from Soundcloud or Youtube")
         self.url_play_btn = QPushButton("Play")
+        self.url_play_btn.setToolTip("Play URL")
         self.url_play_btn.clicked.connect(self.play_url)
         self.url_input_layout.addWidget(self.url_input)
         self.url_input_layout.addWidget(self.url_play_btn)
@@ -169,6 +195,7 @@ class ControllerUI(QMainWindow):
         # Path navigation
         nav_layout = QHBoxLayout()
         back_btn = QPushButton("⬅ Back")
+        back_btn.setToolTip("Go back to previous folder")
         back_btn.clicked.connect(self._browse_back)
         nav_layout.addWidget(back_btn)
         
@@ -178,42 +205,16 @@ class ControllerUI(QMainWindow):
         
         # Content list
         self.content_list = QListWidget()
+        self.content_list.setToolTip("Double-click to play or browse")
+        self.content_list.setMinimumHeight(200)  # Make list more visible
         self.content_list.itemDoubleClicked.connect(self._on_content_item_clicked)
         browser_layout.addWidget(self.content_list)
         
-        browser_group.setLayout(browser_layout)
-        device_layout.addWidget(browser_group)
+        source_layout.addLayout(browser_layout)
+        source_group.setLayout(source_layout)
+        device_layout.addWidget(source_group)
         
-        # Renderer Selection
-        renderer_layout = QHBoxLayout()
-        renderer_layout.addWidget(QLabel("Media Renderer:"))
-        self.renderer_combo = QComboBox()
-        self.renderer_combo.currentTextChanged.connect(self._on_renderer_selected)
-        renderer_layout.addWidget(self.renderer_combo)
-        device_layout.addLayout(renderer_layout)
-        
-        # Control buttons
-        control_layout = QHBoxLayout()
-        power_on_btn = QPushButton("⚡ On")
-        power_on_btn.clicked.connect(self._power_on_renderer)
-        power_off_btn = QPushButton("⭘ Off")
-        power_off_btn.clicked.connect(self._power_off_renderer)
-        refresh_btn = QPushButton("⟳ Discover Devices")
-        refresh_btn.clicked.connect(self._start_discovery)
-        
-        control_layout.addWidget(power_on_btn)
-        control_layout.addWidget(power_off_btn)
-        control_layout.addWidget(refresh_btn)
-        device_layout.addLayout(control_layout)
-        
-        # Input source
-        source_layout = QHBoxLayout()
-        source_layout.addWidget(QLabel("Input:"))
-        self.source_combo = QComboBox()
-        self.source_combo.currentTextChanged.connect(self._on_input_source_changed)
-        source_layout.addWidget(self.source_combo)
-        device_layout.addLayout(source_layout)
-        
+        # Device group layout
         device_group.setLayout(device_layout)
         self.main_layout.addWidget(device_group)
         
@@ -222,19 +223,21 @@ class ControllerUI(QMainWindow):
         playback_layout = QVBoxLayout()
         
         self.title_label = QLabel("No media playing")
+        self.title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.artist_label = QLabel("")
+        self.artist_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.album_label = QLabel("")
+        self.album_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.position_label = QLabel("00:00:00 / 00:00:00")
+        self.position_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.state_label = QLabel("STOPPED")
+        self.state_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         
         playback_layout.addWidget(self.title_label)
         playback_layout.addWidget(self.artist_label)
         playback_layout.addWidget(self.album_label)
-        
-        position_layout = QHBoxLayout()
-        position_layout.addWidget(self.position_label)
-        position_layout.addWidget(self.state_label)
-        playback_layout.addLayout(position_layout)
+        playback_layout.addWidget(self.position_label)
+        playback_layout.addWidget(self.state_label)
         
         playback_group.setLayout(playback_layout)
         self.main_layout.addWidget(playback_group)
@@ -243,44 +246,43 @@ class ControllerUI(QMainWindow):
         controls_group = QGroupBox("Media Controls")
         controls_layout = QVBoxLayout()
         
+        # Media URL
         url_layout = QHBoxLayout()
         url_layout.addWidget(QLabel("Media URL:"))
         self.url_entry = QLineEdit()
+        self.url_entry.setToolTip("Enter direct media URL")
         url_layout.addWidget(self.url_entry)
         controls_layout.addLayout(url_layout)
         
-        # Add time seek controls
-        seek_layout = QHBoxLayout()
-        seek_layout.addWidget(QLabel("Seek to (HH:MM:SS):"))
+        # Time seek controls
+        time_layout = QHBoxLayout()
+        time_layout.addWidget(QLabel("Seek to:"))
         self.time_entry = QLineEdit()
+        self.time_entry.setToolTip("Enter time in HH:MM:SS format")
         self.time_entry.setPlaceholderText("00:00:00")
-        seek_layout.addWidget(self.time_entry)
-        seek_btn = QPushButton("⏩ Seek")
+        time_layout.addWidget(self.time_entry)
+        seek_btn = QPushButton("Seek")
+        seek_btn.setToolTip("Seek to specified time")
         seek_btn.clicked.connect(self._seek_to_time)
-        seek_layout.addWidget(seek_btn)
-        controls_layout.addLayout(seek_layout)
+        time_layout.addWidget(seek_btn)
+        controls_layout.addLayout(time_layout)
         
-        buttons_layout = QHBoxLayout()
+        # Playback controls
+        playback_btns = QHBoxLayout()
         play_btn = QPushButton("▶ Play")
+        play_btn.setToolTip("Play media")
         play_btn.clicked.connect(self._play)
         pause_btn = QPushButton("⏸ Pause")
+        pause_btn.setToolTip("Pause playback")
         pause_btn.clicked.connect(self._pause)
         stop_btn = QPushButton("⏹ Stop")
+        stop_btn.setToolTip("Stop playback")
         stop_btn.clicked.connect(self._stop)
         
-        buttons_layout.addWidget(play_btn)
-        buttons_layout.addWidget(pause_btn)
-        buttons_layout.addWidget(stop_btn)
-        controls_layout.addLayout(buttons_layout)
-        
-        volume_layout = QHBoxLayout()
-        volume_layout.addWidget(QLabel("Volume:"))
-        self.volume_slider = QSlider(Qt.Orientation.Horizontal)
-        self.volume_slider.setRange(0, 100)
-        self.volume_slider.setValue(50)
-        self.volume_slider.valueChanged.connect(self._on_volume_change)
-        volume_layout.addWidget(self.volume_slider)
-        controls_layout.addLayout(volume_layout)
+        playback_btns.addWidget(play_btn)
+        playback_btns.addWidget(pause_btn)
+        playback_btns.addWidget(stop_btn)
+        controls_layout.addLayout(playback_btns)
         
         controls_group.setLayout(controls_layout)
         self.main_layout.addWidget(controls_group)
@@ -297,38 +299,6 @@ class ControllerUI(QMainWindow):
         self.progress_bar.hide()  # Hide initially
         self.status_bar.addPermanentWidget(self.progress_bar)
         self.status_bar.showMessage("Ready")
-        
-        # Disable input source combo box initially
-        self.source_combo.setEnabled(False)
-        
-        # Start background thread to get current input source
-        threading.Thread(target=self._init_input_source, daemon=True).start()
-    
-    def _init_input_source(self):
-        """Initialize input source in background."""
-        try:
-            self.update_queue.put(("update_status", "Initializing input sources..."))
-            self.update_queue.put(("show_progress", None))
-            
-            # Get current input source
-            if self.media_controller.current_renderer:
-                current_input = self.media_controller.get_current_input()
-                sources = self.media_controller.get_input_sources()
-                
-                if sources:
-                    self.update_queue.put(("update_input_sources", {
-                        'sources': sources,
-                        'current': current_input
-                    }))
-                    self.update_queue.put(("update_status", "Input sources initialized"))
-                else:
-                    self.update_queue.put(("update_status", "No input sources available"))
-            
-            self.update_queue.put(("hide_progress", None))
-        except Exception as e:
-            logger.error(f"Error initializing input sources: {e}")
-            self.update_queue.put(("update_status", f"Error initializing input sources: {e}"))
-            self.update_queue.put(("hide_progress", None))
     
     def _start_background_threads(self):
         threading.Thread(target=self._media_info_worker, daemon=True).start()
@@ -380,7 +350,7 @@ class ControllerUI(QMainWindow):
                         try:
                             volume = int(data['volume'])
                             if 0 <= volume <= 100:
-                                self.volume_slider.setValue(volume)
+                                self.receiver_volume.setValue(volume)
                         except (ValueError, TypeError):
                             pass
                             
@@ -412,12 +382,12 @@ class ControllerUI(QMainWindow):
                         logger.warning("Progress bar not available to hide")
                     
                 elif action == "update_input_sources":
-                    self.source_combo.clear()
+                    self.receiver_input.clear()
                     for source in data['sources']:
-                        self.source_combo.addItem(source)
-                    if data['current']:
-                        self.source_combo.setCurrentText(data['current'])
-                    self.source_combo.setEnabled(True)
+                        self.receiver_input.addItem(source)
+                    if data.get('current'):
+                        self.receiver_input.setCurrentText(data['current'])
+                    self.receiver_input.setEnabled(True)
                     
         except queue.Empty:
             pass
@@ -572,9 +542,11 @@ class ControllerUI(QMainWindow):
             
             ip = self._get_renderer_ip(selected_renderer)
             if ip:
-                self.media_controller.power_on(ip)
-                self._update_status_safe(f"Power on command sent to {ip}")
-                logger.info(f"Power on command sent successfully to {ip}")
+                if self.media_controller.set_receiver_power(True):
+                    self._update_status_safe(f"Power on command sent to {ip}")
+                    logger.info(f"Power on command sent successfully to {ip}")
+                else:
+                    self._update_status_safe("Failed to power on receiver")
             else:
                 self._update_status_safe("Failed to find renderer IP")
         except Exception as e:
@@ -592,9 +564,11 @@ class ControllerUI(QMainWindow):
             
             ip = self._get_renderer_ip(selected_renderer)
             if ip:
-                self.media_controller.power_off(ip)
-                self._update_status_safe(f"Power off command sent to {ip}")
-                logger.info(f"Power off command sent successfully to {ip}")
+                if self.media_controller.set_receiver_power(False):
+                    self._update_status_safe(f"Power off command sent to {ip}")
+                    logger.info(f"Power off command sent successfully to {ip}")
+                else:
+                    self._update_status_safe("Failed to power off receiver")
             else:
                 self._update_status_safe("Failed to find renderer IP")
         except Exception as e:
@@ -603,14 +577,16 @@ class ControllerUI(QMainWindow):
             self._update_status_safe(error_msg)
     
     def _on_input_source_changed(self, source):
-        if source:
-            if self.media_controller.set_input_source(source):
+        """Handle input source changes."""
+        if source and self.media_controller.receiver:
+            if self.media_controller.set_receiver_input(source):
                 self._update_status_safe(f"Input source changed to {source}")
             else:
                 self._update_status_safe(f"Failed to change input source to {source}")
-                current_input = self.media_controller.get_current_input()
-                if current_input:
-                    self.source_combo.setCurrentText(current_input)
+                # Get current input from receiver
+                inputs = self.media_controller.get_receiver_inputs()
+                if inputs:
+                    self.receiver_input.setCurrentText(inputs[0])  # Set to first available input
     
     def _update_status_safe(self, message: str) -> None:
         """Safely update status bar message."""
@@ -620,9 +596,13 @@ class ControllerUI(QMainWindow):
             logger.warning(f"Status bar not available to show message: {message}")
     
     def play_soundcloud(self):
-        url = self.soundcloud_entry.text()
-        if url and url != "Enter Soundcloud URL...":
-            self.media_controller.play_soundcloud(url)
+        """Play a Soundcloud URL."""
+        url = self.url_input.text()
+        if url and url != "Enter Soundcloud/Youtube URL...":
+            if self.media_controller.play_soundcloud(url):
+                self._update_status_safe(f"Playing Soundcloud track: {url}")
+            else:
+                self._update_status_safe("Failed to play Soundcloud track")
     
     def _start_discovery(self):
         """Start device discovery in background thread."""
@@ -789,52 +769,28 @@ class ControllerUI(QMainWindow):
                 logger.error(error_msg, exc_info=True)
                 self._update_status_safe(error_msg)
     
-    def _on_renderer_selected(self, renderer_name):
+    def _on_renderer_selected(self, renderer_name: str):
         """Handle renderer selection."""
         if renderer_name:
             try:
-                # Disable input source combo box while loading
-                self.source_combo.setEnabled(False)
-                self.source_combo.clear()
-                
                 renderers = discover_media_renderers()
                 for renderer in renderers:
                     if isinstance(renderer, dict):
                         if renderer['friendly_name'] == renderer_name:
-                            # Create a device-like object from the dictionary
-                            class DeviceWrapper:
-                                def __init__(self, device_dict):
-                                    self.device_type = 'urn:schemas-upnp-org:device:MediaRenderer:1'
-                                    self.friendly_name = device_dict['friendly_name']
-                                    self.location = device_dict['location']
-                                    
-                                    # Create AVTransport and RenderingControl services
-                                    class ServiceWrapper:
-                                        def __init__(self, service_type):
-                                            self.service_type = service_type
-                                    
-                                    self.services = [
-                                        ServiceWrapper('urn:schemas-upnp-org:service:AVTransport:1'),
-                                        ServiceWrapper('urn:schemas-upnp-org:service:RenderingControl:1')
-                                    ]
-                            
-                            device = DeviceWrapper(renderer)
-                            if self.media_controller.set_renderer(device):
-                                # Start background thread to get input sources
-                                threading.Thread(target=self._init_input_source, daemon=True).start()
-                                self._update_status_safe(f"Selected media renderer: {renderer_name}")
+                            if self.media_controller.set_renderer(renderer):
+                                self._update_receiver_controls()
+                                self._update_status_safe(f"Connected to {renderer_name}")
                             return
                     else:
                         if renderer.friendly_name == renderer_name:
                             if self.media_controller.set_renderer(renderer):
-                                # Start background thread to get input sources
-                                threading.Thread(target=self._init_input_source, daemon=True).start()
-                                self._update_status_safe(f"Selected media renderer: {renderer_name}")
+                                self._update_receiver_controls()
+                                self._update_status_safe(f"Connected to {renderer_name}")
                             return
                 
-                self._update_status_safe("Failed to find selected media renderer")
+                self._update_status_safe("Failed to find selected renderer")
             except Exception as e:
-                error_msg = f"Error selecting media renderer: {e}"
+                error_msg = f"Error selecting renderer: {e}"
                 logger.error(error_msg, exc_info=True)
                 self._update_status_safe(error_msg)
     
@@ -899,7 +855,7 @@ class ControllerUI(QMainWindow):
             # Get container contents
             result = self.media_controller.browse_container(container_id)
             if not result:
-                self._update_status_safe("Failed to browse container")
+                self._update_status_safe("No items found")
                 return
                 
             # Parse and display results
@@ -924,8 +880,9 @@ class ControllerUI(QMainWindow):
                 
             self._update_status_safe(f"Found {self.content_list.count()} items")
         except Exception as e:
-            logger.error(f"Error browsing container: {e}", exc_info=True)
-            self._update_status_safe("Error browsing media")
+            error_msg = f"Error browsing container: {e}"
+            logger.error(error_msg, exc_info=True)
+            self._update_status_safe(error_msg)
     
     def run(self):
         """Show the window and start the application event loop."""
@@ -1131,3 +1088,13 @@ class ControllerUI(QMainWindow):
                 self._update_status_safe(f"{'Muted' if checked else 'Unmuted'}")
             else:
                 self._update_status_safe("Failed to set mute state")
+
+    def _update_input_sources(self, data):
+        """Update input sources in the UI."""
+        if 'sources' in data:
+            self.receiver_input.clear()
+            for source in data['sources']:
+                self.receiver_input.addItem(source)
+            if data.get('current'):
+                self.receiver_input.setCurrentText(data['current'])
+            self.receiver_input.setEnabled(True)
