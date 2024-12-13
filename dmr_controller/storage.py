@@ -2,7 +2,7 @@ import json
 import logging
 import datetime
 from pathlib import Path
-from typing import List, Dict, TypedDict, Tuple, Optional
+from typing import List, Dict, TypedDict, Tuple, Optional, Union, Any
 
 import appdirs
 
@@ -29,8 +29,15 @@ class DeviceStorage:
         """Create storage directory if it doesn't exist."""
         self.app_dir.mkdir(parents=True, exist_ok=True)
 
-    def _validate_device_dict(self, device: Dict) -> bool:
-        """Validate that a device dictionary has all required fields."""
+    def _validate_device_dict(self, device: Union[Dict[str, Any], DeviceDict]) -> bool:
+        """Validate that a device dictionary has all required fields.
+        
+        Args:
+            device: Dictionary containing device information
+            
+        Returns:
+            bool: True if the dictionary has all required fields with string values
+        """
         required_fields = {'friendly_name', 'location', 'device_type'}
         return all(
             isinstance(device.get(field), str)
