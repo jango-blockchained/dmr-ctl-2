@@ -1,5 +1,5 @@
 import sys
-from typing import Optional, List, Dict, Any, Union, cast
+from typing import Optional, List, Dict, Any, Union, cast, Tuple
 
 # pylint: disable=no-name-in-module
 from PyQt6.QtWidgets import (  # type: ignore
@@ -215,8 +215,12 @@ class ControllerUI(QMainWindow):
         local_group.setLayout(local_layout)
         self.main_layout.addWidget(local_group)
         
-        # Status bar with progress bar
+        # Initialize status bar
         self.status_bar = self.statusBar()
+        if self.status_bar is None:
+            logger.error("Failed to create status bar")
+            raise RuntimeError("Failed to create status bar")
+            
         self.progress_bar = QProgressBar()
         self.progress_bar.setMaximumWidth(150)
         self.progress_bar.setMaximumHeight(15)
@@ -528,8 +532,12 @@ class ControllerUI(QMainWindow):
                 if current_input:
                     self.source_combo.setCurrentText(current_input)
     
-    def _update_status_safe(self, message: str):
-        self.update_queue.put(("update_status", message))
+    def _update_status_safe(self, message: str) -> None:
+        """Safely update status bar message."""
+        if self.status_bar is not None:
+            self.status_bar.showMessage(message)
+        else:
+            logger.warning(f"Status bar not available to show message: {message}")
     
     def play_soundcloud(self):
         url = self.soundcloud_entry.text()
@@ -607,8 +615,14 @@ class ControllerUI(QMainWindow):
                     
                     # Only add if we have valid data
                     if device_dict['friendly_name'] and device_dict['location']:
-                        server_dicts.append(device_dict)
-                        logger.info(f"Added server: {device_dict['friendly_name']}")
+                        # Cast to DeviceDict before appending
+                        typed_dict = DeviceDict(
+                            friendly_name=str(device_dict['friendly_name']),
+                            location=str(device_dict['location']),
+                            device_type=str(device_dict.get('device_type', ''))
+                        )
+                        server_dicts.append(typed_dict)
+                        logger.info(f"Added server: {typed_dict['friendly_name']}")
                     else:
                         logger.warning(f"Skipping invalid server: {device_dict}")
                 except Exception as e:
@@ -659,7 +673,7 @@ class ControllerUI(QMainWindow):
             logger.error(f"Error during discovery: {e}", exc_info=True)
             self.update_queue.put(("discovery_error", str(e)))
 
-    def _load_saved_devices(self):
+    def _load_saved_devices(self) -> Tuple[List[DeviceDict], List[DeviceDict]]:
         """Load devices from storage on startup."""
         try:
             servers, renderers = self.device_storage.load_devices()
@@ -672,6 +686,7 @@ class ControllerUI(QMainWindow):
             else:
                 self._update_status_safe(f"Loaded {len(servers)} servers and {len(renderers)} renderers from storage")
                 logger.info(f"Successfully loaded {len(servers)} servers and {len(renderers)} renderers from storage")
+            return servers, renderers
         except Exception as e:
             error_msg = f"Error loading saved devices: {e}"
             logger.error(error_msg, exc_info=True)
@@ -679,7 +694,7 @@ class ControllerUI(QMainWindow):
             # Fallback to empty lists
             return [], []
 
-    def _update_device_lists(self, servers: List[Dict], renderers: List[Dict]) -> None:
+    def _update_device_lists(self, servers: List[DeviceDict], renderers: List[DeviceDict]) -> None:
         """Update UI device lists with discovered or loaded devices."""
         # Update server combo box
         self.server_combo.clear()
@@ -882,3 +897,63 @@ class ControllerUI(QMainWindow):
     def run(self):
         """Show the window and start the application event loop."""
         self.show()  # Shows the window
+
+    def _convert_device_to_dict(self, device: Any) -> DeviceDict:
+        """Convert a device object to a DeviceDict."""
+        try:
+            # Get device info
+            if isinstance(device, dict):
+                friendly_name = device.get('friendly_name', '')
+                location = device.get('location', '')
+                device_type = device.get('device_type', '')
+            else:
+                friendly_name = getattr(device, 'friendly_name', '')
+                location = getattr(device, 'location', '')
+                device_type = getattr(device, 'device_type', '')
+                
+            # Create and validate device dict
+            device_dict: DeviceDict = {
+                'friendly_name': str(friendly_name),
+                'location': str(location),
+                'device_type': str(device_type)
+            }
+            
+            return device_dict
+        except Exception as e:
+            logger.error(f"Error converting device to dict: {e}", exc_info=True)
+            # Return empty but valid DeviceDict
+            return DeviceDict(friendly_name='', location='', device_type='')
+
+    def _discover_devices(self):
+        """Run device discovery in a separate thread."""
+        try:
+            # Clear existing devices
+            server_dicts: List[DeviceDict] = []
+            renderer_dicts: List[DeviceDict] = []
+            
+            # Discover devices
+            servers = self.media_controller.discovery.discover_media_servers()
+            renderers = self.media_controller.discovery.discover_media_renderers()
+            
+            # Convert servers to dicts
+            for server in servers:
+                try:
+                    device_dict = self._convert_device_to_dict(server)
+                    
+                    # Log the conversion
+                    logger.debug(f"Converting server to dict: {device_dict}")
+                    
+                    # Only add if we have valid data
+                    if device_dict['friendly_name'] and device_dict['location']:
+                        # Cast to DeviceDict before appending
+                        typed_dict = DeviceDict(
+                            friendly_name=str(device_dict['friendly_name']),
+                            location=str(device_dict['location']),
+                            device_type=str(device_dict.get('device_type', ''))
+                        )
+                        server_dicts.append(typed_dict)
+                        logger.info(f"Added server: {typed_dict['friendly_name']}")
+                    else:
+                        logger.warning(f"Skipping invalid server: {device_dict}")
+                except Exception as e:
+                    logger.error(f"Error converting server to dict: {e}", exc_info=True)
