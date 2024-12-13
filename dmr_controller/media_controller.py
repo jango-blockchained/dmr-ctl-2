@@ -1,5 +1,5 @@
 import logging
-from typing import Optional, List, Dict
+from typing import Optional, List, Dict, Any, Tuple
 try:
     import upnpclient
 except ImportError:
@@ -49,11 +49,11 @@ class MediaController:
     
     def __init__(self):
         self.discovery = DeviceDiscovery()
-        self.current_renderer: Optional[upnpclient.Device] = None
-        self.current_server: Optional[upnpclient.Device] = None
+        self.current_renderer: Optional['upnpclient.Device'] = None
+        self.current_server: Optional['upnpclient.Device'] = None
         self.current_media_url: Optional[str] = None
-        self._av_transport = None
-        self._rendering_control = None
+        self._av_transport: Optional[Any] = None
+        self._rendering_control: Optional[Any] = None
         
         # Initialize VLC if available
         self.instance = None
@@ -71,10 +71,23 @@ class MediaController:
             
         try:
             self.instance = vlc.Instance()
+            if self.instance is None:
+                logger.error("Failed to create VLC instance")
+                self.player = None
+                return
+                
             self.player = self.instance.media_player_new()
+            if self.player is None:
+                logger.error("Failed to create VLC media player")
+                return
+                
             logger.info("VLC initialized successfully")
-        except Exception as e:
+        except AttributeError as e:
             logger.error(f"Failed to initialize VLC: {e}")
+            self.instance = None
+            self.player = None
+        except Exception as e:
+            logger.error(f"An unexpected error occurred while initializing VLC: {e}")
             self.instance = None
             self.player = None
 
@@ -116,8 +129,17 @@ class MediaController:
                             self.control_url = f"{base_url}/MediaRenderer/AVTransport/Control"
                             logger.info(f"Using AVTransport control URL: {self.control_url}")
                         
-                        def _send_command(self, action: str, params: Dict = None) -> Dict:
-                            """Send SOAP command to AVTransport service."""
+                        def _send_command(self, action: str, params: Optional[Dict[str, str]] = None, timeout: Optional[Tuple[float, float]] = None) -> Dict[str, Any]:
+                            """Send SOAP command to AVTransport service.
+                            
+                            Args:
+                                action: The SOAP action to perform
+                                params: Optional dictionary of parameters
+                                timeout: Optional tuple of (connect timeout, read timeout) in seconds
+                            
+                            Returns:
+                                Dictionary with command result
+                            """
                             try:
                                 # Build parameters XML
                                 params_xml = ""
@@ -146,25 +168,43 @@ class MediaController:
                                 
                                 # Configure timeouts and retries
                                 retries = 3
+                                backoff_factor = 1.5  # Each retry will wait 1.5x longer
+                                
                                 for attempt in range(retries):
                                     try:
-                                        # Send request with shorter timeout
+                                        # Use provided timeout or default
+                                        request_timeout = timeout if timeout is not None else (3, 5)
+                                        
+                                        # Send request with timeout
                                         response = session.post(
                                             self.control_url,
                                             headers=headers,
                                             data=body,
-                                            timeout=(3, 5)  # (connect timeout, read timeout)
+                                            timeout=request_timeout
                                         )
                                         response.raise_for_status()
                                         return {'success': True}
+                                        
                                     except requests.Timeout:
+                                        wait_time = backoff_factor ** attempt
                                         if attempt < retries - 1:
-                                            logger.warning(f"Timeout on attempt {attempt + 1}/{retries}, retrying...")
+                                            logger.warning(
+                                                f"Timeout on attempt {attempt + 1}/{retries} "
+                                                f"connecting to {self.control_url}, "
+                                                f"waiting {wait_time:.1f}s before retry..."
+                                            )
+                                            time.sleep(wait_time)
                                             continue
                                         raise
+                                        
                                     except requests.RequestException as e:
+                                        wait_time = backoff_factor ** attempt
                                         if attempt < retries - 1:
-                                            logger.warning(f"Request failed on attempt {attempt + 1}/{retries}: {e}, retrying...")
+                                            logger.warning(
+                                                f"Request failed on attempt {attempt + 1}/{retries}: {e}, "
+                                                f"waiting {wait_time:.1f}s before retry..."
+                                            )
+                                            time.sleep(wait_time)
                                             continue
                                         raise
                                     finally:
@@ -179,19 +219,49 @@ class MediaController:
                         def SetAVTransportURI(self, InstanceID: int, CurrentURI: str, CurrentURIMetaData: str = "") -> Dict:
                             """Set the URI for playback."""
                             logger.info(f"Setting AVTransport URI: {CurrentURI}")
-                            result = self._send_command('SetAVTransportURI', {
-                                'InstanceID': str(InstanceID),
-                                'CurrentURI': CurrentURI,
-                                'CurrentURIMetaData': CurrentURIMetaData
-                            })
                             
-                            if not result.get('success'):
-                                logger.error(f"Failed to set transport URI: {result.get('error')}")
-                                return result
+                            # Use longer timeouts for SetAVTransportURI as it can take longer
+                            retries = 3
+                            backoff_factor = 2.0  # More aggressive backoff
+                            base_timeout = (5, 15)  # Longer initial timeout (connect, read)
                             
-                            # Wait a bit for the URI to be set
-                            time.sleep(0.5)
-                            return result
+                            for attempt in range(retries):
+                                try:
+                                    # Calculate timeout with exponential backoff
+                                    timeout = (
+                                        base_timeout[0] * (backoff_factor ** attempt),
+                                        base_timeout[1] * (backoff_factor ** attempt)
+                                    )
+                                    
+                                    result = self._send_command('SetAVTransportURI', {
+                                        'InstanceID': str(InstanceID),
+                                        'CurrentURI': CurrentURI,
+                                        'CurrentURIMetaData': CurrentURIMetaData
+                                    }, timeout=timeout)
+                                    
+                                    if not result.get('success'):
+                                        logger.error(f"Failed to set transport URI: {result.get('error')}")
+                                        if attempt < retries - 1:
+                                            wait_time = backoff_factor ** attempt
+                                            logger.warning(f"Retrying SetAVTransportURI in {wait_time:.1f}s...")
+                                            time.sleep(wait_time)
+                                            continue
+                                        return result
+                                    
+                                    # Wait a bit longer for the URI to be set
+                                    time.sleep(1.0)
+                                    return result
+                                    
+                                except Exception as e:
+                                    logger.error(f"Error in SetAVTransportURI attempt {attempt + 1}: {e}")
+                                    if attempt < retries - 1:
+                                        wait_time = backoff_factor ** attempt
+                                        logger.warning(f"Retrying SetAVTransportURI in {wait_time:.1f}s...")
+                                        time.sleep(wait_time)
+                                        continue
+                                    raise
+                            
+                            return {'success': False, 'error': 'All SetAVTransportURI attempts failed'}
                         
                         def Play(self, InstanceID: int, Speed: str = "1") -> Dict:
                             """Start playback."""
@@ -236,14 +306,14 @@ class MediaController:
                                 })
                                 if result.get('success'):
                                     return {
-                                        'Track': 0,
+                                        'Track': int(result['Track']),
                                         'TrackDuration': '00:00:00',
                                         'TrackMetaData': '',
                                         'TrackURI': '',
                                         'RelTime': '00:00:00',
                                         'AbsTime': '00:00:00',
-                                        'RelCount': 0,
-                                        'AbsCount': 0
+                                        'RelCount': int(result['RelCount']),
+                                        'AbsCount': int(result['AbsCount'])
                                     }
                                 return {}
                             except Exception as e:
@@ -276,7 +346,7 @@ class MediaController:
                             self.control_url = f"{base_url}/MediaRenderer/RenderingControl/Control"
                             logger.info(f"Using RenderingControl control URL: {self.control_url}")
                         
-                        def _send_command(self, action: str, params: Dict = None) -> Dict:
+                        def _send_command(self, action: str, params: Dict = {}) -> Dict:
                             """Send SOAP command to RenderingControl service."""
                             try:
                                 # Build parameters XML
@@ -312,11 +382,17 @@ class MediaController:
                         def SetVolume(self, InstanceID: int, Channel: str, DesiredVolume: int) -> Dict:
                             """Set the volume level."""
                             logger.info(f"Setting volume to {DesiredVolume}")
-                            return self._send_command('SetVolume', {
-                                'InstanceID': str(InstanceID),
-                                'Channel': Channel,
-                                'DesiredVolume': str(DesiredVolume)
-                            })
+                            try:
+                                # Ensure volume is an integer
+                                volume = int(DesiredVolume)
+                                return self._send_command('SetVolume', {
+                                    'InstanceID': str(InstanceID),
+                                    'Channel': Channel,
+                                    'DesiredVolume': str(volume)
+                                })
+                            except (ValueError, TypeError) as e:
+                                logger.error(f"Invalid volume value: {e}")
+                                return {'success': False, 'error': 'Invalid volume value'}
                     
                     # Create services list with properly instantiated services
                     self.services = [
@@ -370,12 +446,13 @@ class MediaController:
                 content_directory = None
                 for service in device.findall('.//ns:service', ns):
                     service_type = service.find('ns:serviceType', ns)
-                    if service_type is not None and 'ContentDirectory' in service_type.text:
+                    service_type_text = service_type.text if service_type is not None else ''
+                    if service_type_text and 'ContentDirectory' in service_type_text:
                         control_url = service.find('ns:controlURL', ns)
                         if control_url is not None:
                             content_directory = {
-                                'type': service_type.text,
-                                'control_url': control_url.text
+                                'type': service_type_text,
+                                'control_url': control_url.text if control_url.text is not None else ''
                             }
                             break
                 
@@ -484,9 +561,9 @@ class MediaController:
                                     
                                     return {
                                         'Result': result.text if result is not None else '',
-                                        'NumberReturned': int(number_returned.text) if number_returned is not None else 0,
-                                        'TotalMatches': int(total_matches.text) if total_matches is not None else 0,
-                                        'UpdateID': int(update_id.text) if update_id is not None else 0
+                                        'NumberReturned': int(number_returned.text) if number_returned is not None and number_returned.text is not None else 0,
+                                        'TotalMatches': int(total_matches.text) if total_matches is not None and total_matches.text is not None else 0,
+                                        'UpdateID': int(update_id.text) if update_id is not None and update_id.text is not None else 0
                                     }
                                 
                                 logger.error("Invalid SOAP response format")
@@ -774,6 +851,9 @@ class MediaController:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 logger.info(f"Downloading from URL: {url}")
                 info = ydl.extract_info(url, download=True)
+                if not info or 'title' not in info:
+                    raise ValueError("Failed to get track information from URL")
+                    
                 downloaded_file = downloads_dir / f"{info['title']}.mp3"
                 
                 if not downloaded_file.exists():
