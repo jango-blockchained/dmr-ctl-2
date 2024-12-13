@@ -51,13 +51,246 @@ def check_vlc_installed():
     except subprocess.CalledProcessError:
         return False
 
+class AVTransportService:
+    """Service class for handling AVTransport commands."""
+    
+    def __init__(self, location):
+        self.service_type = 'urn:schemas-upnp-org:service:AVTransport:1'
+        self.location = location
+        base_url = '/'.join(location.split('/')[:3])
+        self.control_url = f"{base_url}/MediaRenderer/AVTransport/Control"
+        logger.info(f"Using AVTransport control URL: {self.control_url}")
+        # Configure timeouts and retries
+        self.timeout = 5  # seconds
+        self.max_retries = 3
+        self.retry_delay = 1  # seconds
+        
+    def _check_renderer_available(self) -> bool:
+        """Check if the renderer is responding."""
+        try:
+            # Try a simple HEAD request first
+            base_url = '/'.join(self.control_url.split('/')[:3])
+            response = requests.head(base_url, timeout=2)
+            return response.status_code == 200
+        except:
+            return False
+        
+    def _send_command(self, action: str, params: dict, extended_timeout: bool = False) -> None:
+        """
+        Send SOAP command to the device with retries.
+        
+        Args:
+            action: The UPnP action to perform
+            params: The parameters for the action
+            extended_timeout: Whether to use extended timeouts for this command
+        """
+        if not self._check_renderer_available():
+            raise RuntimeError("Renderer is not responding")
+            
+        headers = {
+            'Content-Type': 'text/xml; charset="utf-8"',
+            'SOAPACTION': f'"urn:schemas-upnp-org:service:AVTransport:1#{action}"'
+        }
+        
+        # Build SOAP body
+        params_xml = '\n'.join(f'<{k}>{v}</>{k}>' for k, v in params.items())
+        body = f"""<?xml version="1.0"?>
+        <s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/" s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/">
+            <s:Body>
+                <u:{action} xmlns:u="urn:schemas-upnp-org:service:AVTransport:1">
+                    {params_xml}
+                </u:{action}>
+            </s:Body>
+        </s:Envelope>"""
+        
+        # Log the request details for debugging
+        logger.debug(f"Sending request to: {self.control_url}")
+        logger.debug(f"Headers: {headers}")
+        logger.debug(f"Body length: {len(body)} bytes")
+        
+        # Use extended timeouts for certain operations
+        timeout = (self.timeout * 2, self.timeout * 4) if extended_timeout else (self.timeout, self.timeout * 2)
+        
+        last_exception = None
+        for attempt in range(self.max_retries):
+            try:
+                logger.debug(f"Sending {action} command (attempt {attempt + 1}/{self.max_retries})")
+                response = requests.post(
+                    self.control_url,
+                    headers=headers,
+                    data=body,
+                    timeout=timeout
+                )
+                response.raise_for_status()
+                
+                # Log response for debugging
+                logger.debug(f"Response status: {response.status_code}")
+                logger.debug(f"Response content length: {len(response.content)} bytes")
+                
+                return  # Success
+            except requests.Timeout as e:
+                last_exception = e
+                logger.warning(f"Timeout on attempt {attempt + 1} for {action}: {e}")
+            except requests.ConnectionError as e:
+                last_exception = e
+                logger.warning(f"Connection error on attempt {attempt + 1} for {action}: {e}")
+            except requests.RequestException as e:
+                last_exception = e
+                logger.warning(f"Request error on attempt {attempt + 1} for {action}: {e}")
+            
+            if attempt < self.max_retries - 1:
+                time.sleep(self.retry_delay * (attempt + 1))  # Exponential backoff
+        
+        # If we get here, all retries failed
+        raise last_exception or RuntimeError(f"Failed to send {action} command after {self.max_retries} attempts")
+        
+    def SetAVTransportURI(self, InstanceID: int, CurrentURI: str, CurrentURIMetaData: str) -> None:
+        """Set the URI for playback."""
+        try:
+            # Validate the URL
+            if not CurrentURI.startswith(('http://', 'https://')):
+                raise ValueError("Invalid URL scheme")
+                
+            # Check if URL is reachable
+            try:
+                response = requests.head(CurrentURI, timeout=2)
+                response.raise_for_status()
+            except:
+                logger.warning(f"Media URL {CurrentURI} is not directly accessible, proceeding anyway")
+            
+            logger.info(f"Setting transport URI: {CurrentURI}")
+            # Use extended timeout for SetAVTransportURI due to long URLs
+            self._send_command('SetAVTransportURI', {
+                'InstanceID': InstanceID,
+                'CurrentURI': CurrentURI,
+                'CurrentURIMetaData': CurrentURIMetaData
+            }, extended_timeout=True)
+            
+            # Wait a bit longer for long URLs
+            wait_time = 1.0 if len(CurrentURI) > 255 else 0.5
+            time.sleep(wait_time)
+            
+        except Exception as e:
+            logger.error(f"Error setting transport URI: {e}")
+            raise
+    
+    def Play(self, InstanceID: int, Speed: str) -> None:
+        """Start playback."""
+        logger.info("Starting playback")
+        self._send_command('Play', {
+            'InstanceID': InstanceID,
+            'Speed': Speed
+        })
+        
+    def Pause(self, InstanceID: int) -> None:
+        """Pause playback."""
+        self._send_command('Pause', {
+            'InstanceID': InstanceID
+        })
+        
+    def Stop(self, InstanceID: int) -> None:
+        """Stop playback."""
+        self._send_command('Stop', {
+            'InstanceID': InstanceID
+        })
+        
+    def GetPositionInfo(self, InstanceID: int) -> dict:
+        """Get current position information."""
+        try:
+            self._send_command('GetPositionInfo', {
+                'InstanceID': InstanceID
+            })
+            return {}  # TODO: Parse response XML
+        except:
+            return {}
+            
+    def GetTransportInfo(self, InstanceID: int) -> dict:
+        """Get transport state information."""
+        try:
+            self._send_command('GetTransportInfo', {
+                'InstanceID': InstanceID
+            })
+            return {}  # TODO: Parse response XML
+        except:
+            return {}
+
+
+class RenderingControlService:
+    """Service class for handling RenderingControl commands."""
+    
+    def __init__(self, location):
+        self.service_type = 'urn:schemas-upnp-org:service:RenderingControl:1'
+        self.location = location
+        base_url = '/'.join(location.split('/')[:3])
+        self.control_url = f"{base_url}/MediaRenderer/RenderingControl/Control"
+        logger.info(f"Using RenderingControl control URL: {self.control_url}")
+        # Configure timeouts and retries
+        self.timeout = 5  # seconds
+        self.max_retries = 3
+        self.retry_delay = 1  # seconds
+        
+    def _send_command(self, action: str, params: dict) -> None:
+        """Send SOAP command to the device with retries."""
+        headers = {
+            'Content-Type': 'text/xml; charset="utf-8"',
+            'SOAPACTION': f'"urn:schemas-upnp-org:service:RenderingControl:1#{action}"'
+        }
+        
+        # Build SOAP body
+        params_xml = '\n'.join(f'<{k}>{v}</>{k}>' for k, v in params.items())
+        body = f"""<?xml version="1.0"?>
+        <s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/" s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/">
+            <s:Body>
+                <u:{action} xmlns:u="urn:schemas-upnp-org:service:RenderingControl:1">
+                    {params_xml}
+                </u:{action}>
+            </s:Body>
+        </s:Envelope>"""
+        
+        last_exception = None
+        for attempt in range(self.max_retries):
+            try:
+                logger.debug(f"Sending {action} command (attempt {attempt + 1}/{self.max_retries})")
+                response = requests.post(
+                    self.control_url,
+                    headers=headers,
+                    data=body,
+                    timeout=(self.timeout, self.timeout * 2)  # (connect timeout, read timeout)
+                )
+                response.raise_for_status()
+                return  # Success
+            except requests.Timeout as e:
+                last_exception = e
+                logger.warning(f"Timeout on attempt {attempt + 1} for {action}: {e}")
+            except requests.ConnectionError as e:
+                last_exception = e
+                logger.warning(f"Connection error on attempt {attempt + 1} for {action}: {e}")
+            except requests.RequestException as e:
+                last_exception = e
+                logger.warning(f"Request error on attempt {attempt + 1} for {action}: {e}")
+            
+            if attempt < self.max_retries - 1:
+                time.sleep(self.retry_delay)
+        
+        # If we get here, all retries failed
+        raise last_exception or RuntimeError(f"Failed to send {action} command after {self.max_retries} attempts")
+    
+    def SetVolume(self, InstanceID: int, Channel: str, DesiredVolume: int) -> None:
+        """Set the volume level."""
+        self._send_command('SetVolume', {
+            'InstanceID': InstanceID,
+            'Channel': Channel,
+            'DesiredVolume': DesiredVolume
+        })
+
+
 class MediaController:
     """Controls media playback and device operations."""
     
     def __init__(self):
         self.discovery = DeviceDiscovery()
-        self.current_renderer: Optional[UPnPDevice] = None
-        self.current_server: Optional[UPnPDevice] = None
+        self._current_renderer: Optional[UPnPDevice] = None
+        self._current_server: Optional[UPnPDevice] = None
         self.current_media_url: Optional[str] = None
         self._av_transport: Optional[Any] = None
         self._rendering_control: Optional[Any] = None
@@ -99,6 +332,44 @@ class MediaController:
             self.instance = None
             self.player = None
 
+    @property
+    def current_renderer(self) -> Optional[UPnPDevice]:
+        """Get current renderer."""
+        return self._current_renderer
+    
+    @current_renderer.setter
+    def current_renderer(self, value: Optional[Union[UPnPDevice, Dict[str, Any]]]) -> None:
+        """Set current renderer.
+        
+        Args:
+            value: The renderer device to set, can be a UPnPDevice or a dict with device info
+        """
+        if value is None:
+            self._current_renderer = None
+            return
+            
+        # If it's a dict, convert it to match UPnPDevice interface
+        if isinstance(value, dict):
+            class DictWrapper:
+                def __init__(self, data: Dict[str, Any]):
+                    self.location = data.get('location', '')
+                    self.device_type = data.get('device_type', '')
+                    self.friendly_name = data.get('friendly_name', '')
+                    
+            self._current_renderer = cast(UPnPDevice, DictWrapper(value))
+        else:
+            self._current_renderer = cast(UPnPDevice, value)
+    
+    @property
+    def current_server(self) -> Optional[UPnPDevice]:
+        """Get current server."""
+        return self._current_server
+    
+    @current_server.setter
+    def current_server(self, value: Optional[UPnPDevice]):
+        """Set current server."""
+        self._current_server = value
+
     def set_renderer(self, renderer) -> bool:
         """
         Set the current media renderer device.
@@ -135,14 +406,14 @@ class MediaController:
                     self.receiver = None
             
             # Fall back to generic DLNA control
-            self.current_renderer = renderer
+            self.current_renderer = renderer  # Use property setter
             self._setup_av_transport()
             logger.info("Using generic DLNA control")
             return True
             
         except Exception as e:
             logger.error(f"Error setting renderer: {e}")
-            self.current_renderer = None
+            self.current_renderer = None  # Use property setter
             self._av_transport = None
             self._rendering_control = None
             self.receiver = None
@@ -163,241 +434,12 @@ class MediaController:
                 logger.error("Renderer location URL is required")
                 return False
             
-            # Create AVTransport service
-            class AVTransportService:
-                def __init__(self, location):
-                    self.service_type = 'urn:schemas-upnp-org:service:AVTransport:1'
-                    self.location = location
-                    base_url = '/'.join(location.split('/')[:3])
-                    self.control_url = f"{base_url}/MediaRenderer/AVTransport/Control"
-                    logger.info(f"Using AVTransport control URL: {self.control_url}")
-                    # Configure timeouts and retries
-                    self.timeout = 5  # seconds
-                    self.max_retries = 3
-                    self.retry_delay = 1  # seconds
-                    
-                def _check_renderer_available(self) -> bool:
-                    """Check if the renderer is responding."""
-                    try:
-                        # Try a simple HEAD request first
-                        base_url = '/'.join(self.control_url.split('/')[:3])
-                        response = requests.head(base_url, timeout=2)
-                        return response.status_code == 200
-                    except:
-                        return False
-                    
-                def _send_command(self, action: str, params: dict, extended_timeout: bool = False) -> None:
-                    """
-                    Send SOAP command to the device with retries.
-                    
-                    Args:
-                        action: The UPnP action to perform
-                        params: The parameters for the action
-                        extended_timeout: Whether to use extended timeouts for this command
-                    """
-                    if not self._check_renderer_available():
-                        raise RuntimeError("Renderer is not responding")
-                        
-                    headers = {
-                        'Content-Type': 'text/xml; charset="utf-8"',
-                        'SOAPACTION': f'"urn:schemas-upnp-org:service:AVTransport:1#{action}"'
-                    }
-                    
-                    # Build SOAP body
-                    params_xml = '\n'.join(f'<{k}>{v}</>{k}>' for k, v in params.items())
-                    body = f"""<?xml version="1.0"?>
-                    <s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/" s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/">
-                        <s:Body>
-                            <u:{action} xmlns:u="urn:schemas-upnp-org:service:AVTransport:1">
-                                {params_xml}
-                            </u:{action}>
-                        </s:Body>
-                    </s:Envelope>"""
-                    
-                    # Log the request details for debugging
-                    logger.debug(f"Sending request to: {self.control_url}")
-                    logger.debug(f"Headers: {headers}")
-                    logger.debug(f"Body length: {len(body)} bytes")
-                    
-                    # Use extended timeouts for certain operations
-                    timeout = (self.timeout * 2, self.timeout * 4) if extended_timeout else (self.timeout, self.timeout * 2)
-                    
-                    last_exception = None
-                    for attempt in range(self.max_retries):
-                        try:
-                            logger.debug(f"Sending {action} command (attempt {attempt + 1}/{self.max_retries})")
-                            response = requests.post(
-                                self.control_url,
-                                headers=headers,
-                                data=body,
-                                timeout=timeout
-                            )
-                            response.raise_for_status()
-                            
-                            # Log response for debugging
-                            logger.debug(f"Response status: {response.status_code}")
-                            logger.debug(f"Response content length: {len(response.content)} bytes")
-                            
-                            return  # Success
-                        except requests.Timeout as e:
-                            last_exception = e
-                            logger.warning(f"Timeout on attempt {attempt + 1} for {action}: {e}")
-                        except requests.ConnectionError as e:
-                            last_exception = e
-                            logger.warning(f"Connection error on attempt {attempt + 1} for {action}: {e}")
-                        except requests.RequestException as e:
-                            last_exception = e
-                            logger.warning(f"Request error on attempt {attempt + 1} for {action}: {e}")
-                        
-                        if attempt < self.max_retries - 1:
-                            time.sleep(self.retry_delay * (attempt + 1))  # Exponential backoff
-                    
-                    # If we get here, all retries failed
-                    raise last_exception or RuntimeError(f"Failed to send {action} command after {self.max_retries} attempts")
-                    
-                def SetAVTransportURI(self, InstanceID: int, CurrentURI: str, CurrentURIMetaData: str) -> None:
-                    """Set the URI for playback."""
-                    try:
-                        # Validate the URL
-                        if not CurrentURI.startswith(('http://', 'https://')):
-                            raise ValueError("Invalid URL scheme")
-                            
-                        # Check if URL is reachable
-                        try:
-                            response = requests.head(CurrentURI, timeout=2)
-                            response.raise_for_status()
-                        except:
-                            logger.warning(f"Media URL {CurrentURI} is not directly accessible, proceeding anyway")
-                        
-                        logger.info(f"Setting transport URI: {CurrentURI}")
-                        # Use extended timeout for SetAVTransportURI due to long URLs
-                        self._send_command('SetAVTransportURI', {
-                            'InstanceID': InstanceID,
-                            'CurrentURI': CurrentURI,
-                            'CurrentURIMetaData': CurrentURIMetaData
-                        }, extended_timeout=True)
-                        
-                        # Wait a bit longer for long URLs
-                        wait_time = 1.0 if len(CurrentURI) > 255 else 0.5
-                        time.sleep(wait_time)
-                        
-                    except Exception as e:
-                        logger.error(f"Error setting transport URI: {e}")
-                        raise
-                    
-                    def Play(self, InstanceID: int, Speed: str) -> None:
-                        """Start playback."""
-                        logger.info("Starting playback")
-                        self._send_command('Play', {
-                            'InstanceID': InstanceID,
-                            'Speed': Speed
-                        })
-                        
-                    def Pause(self, InstanceID: int) -> None:
-                        """Pause playback."""
-                        self._send_command('Pause', {
-                            'InstanceID': InstanceID
-                        })
-                        
-                    def Stop(self, InstanceID: int) -> None:
-                        """Stop playback."""
-                        self._send_command('Stop', {
-                            'InstanceID': InstanceID
-                        })
-                        
-                    def GetPositionInfo(self, InstanceID: int) -> dict:
-                        """Get current position information."""
-                        try:
-                            self._send_command('GetPositionInfo', {
-                                'InstanceID': InstanceID
-                            })
-                            return {}  # TODO: Parse response XML
-                        except:
-                            return {}
-                            
-                        def GetTransportInfo(self, InstanceID: int) -> dict:
-                            """Get transport state information."""
-                            try:
-                                self._send_command('GetTransportInfo', {
-                                    'InstanceID': InstanceID
-                                })
-                                return {}  # TODO: Parse response XML
-                            except:
-                                return {}
-                    
-                # Create RenderingControl service
-                class RenderingControlService:
-                    def __init__(self, location):
-                        self.service_type = 'urn:schemas-upnp-org:service:RenderingControl:1'
-                        self.location = location
-                        base_url = '/'.join(location.split('/')[:3])
-                        self.control_url = f"{base_url}/MediaRenderer/RenderingControl/Control"
-                        logger.info(f"Using RenderingControl control URL: {self.control_url}")
-                        # Configure timeouts and retries
-                        self.timeout = 5  # seconds
-                        self.max_retries = 3
-                        self.retry_delay = 1  # seconds
-                        
-                    def _send_command(self, action: str, params: dict) -> None:
-                        """Send SOAP command to the device with retries."""
-                        headers = {
-                            'Content-Type': 'text/xml; charset="utf-8"',
-                            'SOAPACTION': f'"urn:schemas-upnp-org:service:RenderingControl:1#{action}"'
-                        }
-                        
-                        # Build SOAP body
-                        params_xml = '\n'.join(f'<{k}>{v}</>{k}>' for k, v in params.items())
-                        body = f"""<?xml version="1.0"?>
-                        <s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/" s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/">
-                            <s:Body>
-                                <u:{action} xmlns:u="urn:schemas-upnp-org:service:RenderingControl:1">
-                                    {params_xml}
-                                </u:{action}>
-                            </s:Body>
-                        </s:Envelope>"""
-                        
-                        last_exception = None
-                        for attempt in range(self.max_retries):
-                            try:
-                                logger.debug(f"Sending {action} command (attempt {attempt + 1}/{self.max_retries})")
-                                response = requests.post(
-                                    self.control_url,
-                                    headers=headers,
-                                    data=body,
-                                    timeout=(self.timeout, self.timeout * 2)  # (connect timeout, read timeout)
-                                )
-                                response.raise_for_status()
-                                return  # Success
-                            except requests.Timeout as e:
-                                last_exception = e
-                                logger.warning(f"Timeout on attempt {attempt + 1} for {action}: {e}")
-                            except requests.ConnectionError as e:
-                                last_exception = e
-                                logger.warning(f"Connection error on attempt {attempt + 1} for {action}: {e}")
-                            except requests.RequestException as e:
-                                last_exception = e
-                                logger.warning(f"Request error on attempt {attempt + 1} for {action}: {e}")
-                            
-                            if attempt < self.max_retries - 1:
-                                time.sleep(self.retry_delay)
-                        
-                        # If we get here, all retries failed
-                        raise last_exception or RuntimeError(f"Failed to send {action} command after {self.max_retries} attempts")
-                    
-                    def SetVolume(self, InstanceID: int, Channel: str, DesiredVolume: int) -> None:
-                        """Set the volume level."""
-                        self._send_command('SetVolume', {
-                            'InstanceID': InstanceID,
-                            'Channel': Channel,
-                            'DesiredVolume': DesiredVolume
-                        })
-                    
-                # Create services list with both services
-                self.services = [
-                    AVTransportService(location),
-                    RenderingControlService(location)
-                ]
-                
+            # Create services list with both services
+            self.services = [
+                AVTransportService(location),
+                RenderingControlService(location)
+            ]
+            
             self._av_transport = next(
                 (service for service in self.services 
                  if 'AVTransport' in service.service_type),
@@ -490,10 +532,13 @@ class MediaController:
             
             # Create device wrapper
             class DeviceWrapper:
+                """Wrapper for UPnP devices with content directory service."""
+                
                 def __init__(self, location: str, device_info: Dict):
                     self.device_type = device_info['device_type']
                     self.friendly_name = device_info['friendly_name']
                     self.location = location
+                    self._content_directory = None  # Initialize as None
                     
                     # Create ContentDirectory service
                     class ServiceWrapper:
@@ -576,7 +621,14 @@ class MediaController:
                                     'UpdateID': 0
                                 }
                     
+                    # Create services list and expose content_directory
                     self.services = [ServiceWrapper(location, device_info.get('content_directory'))]
+                    self._content_directory = self.services[0]  # Store service instance
+                
+                @property
+                def content_directory(self):
+                    """Get content directory service."""
+                    return self._content_directory
             
             # Create server instance
             server_wrapper = DeviceWrapper(location, device_info)
@@ -592,7 +644,7 @@ class MediaController:
             
             # Check if it's a media server
             if 'mediaserver' in device_type or 'contentdirectory' in device_type:
-                self.current_server = cast(UPnPDevice, server_wrapper)  # Cast to satisfy type checker
+                self._current_server = cast(UPnPDevice, server_wrapper)  # Cast to satisfy type checker
                 logger.info(f"Successfully set media server: {device_info['friendly_name']}")
                 return True
             
@@ -937,343 +989,120 @@ class MediaController:
             logger.debug(f"Error getting media info: {e}")
             return None
     
-    def get_input_sources(self) -> Optional[List[str]]:
-        """Get available input sources for Yamaha receiver."""
-        try:
-            if not self.current_renderer:
-                logger.error("No renderer selected")
-                return None
-                
-            # Common Yamaha input sources
-            sources = [
-                'HDMI1', 'HDMI2', 'HDMI3', 'HDMI4', 'HDMI5',
-                'AV1', 'AV2', 'AV3', 'AV4', 'AV5', 'AV6',
-                'AUDIO1', 'AUDIO2', 'AUDIO3',
-                'TUNER', 'PHONO', 'CD',
-                'NET RADIO', 'SERVER', 'NAPSTER',
-                'SPOTIFY', 'BLUETOOTH', 'USB',
-                'AirPlay'
-            ]
-            return sources
-        except Exception as e:
-            logger.error(f"Error getting input sources: {e}")
-            return None
-    
-    def set_input_source(self, source: str) -> bool:
-        """Set the input source for Yamaha receiver."""
-        try:
-            if not self.current_renderer:
-                logger.error("No renderer selected")
-                return False
-                
-            # Get IP from renderer location
-            ip_match = re.search(r'http://([^:/]+)[:/]', self.current_renderer.location)
-            if not ip_match:
-                logger.error("Could not extract IP address from renderer location")
-                return False
-                
-            ip = ip_match.group(1)
-            
-            # URL for Yamaha control API
-            url = f'http://{ip}/YamahaRemoteControl/ctrl'
-            
-            # XML payload for input selection
-            payload = f'''
-            <YAMAHA_AV cmd="PUT">
-                <Main_Zone>
-                    <Input>
-                        <Input_Sel>{source}</Input_Sel>
-                    </Input>
-                </Main_Zone>
-            </YAMAHA_AV>
-            '''
-            
-            # Send the command
-            response = requests.post(url, data=payload, timeout=5)
-            
-            if response.status_code == 200:
-                logger.info(f"Successfully changed input to {source}")
-                return True
-            else:
-                logger.error(f"Failed to change input. Status code: {response.status_code}")
-                return False
-                
-        except Exception as e:
-            logger.error(f"Error setting input source: {e}")
-            return False
-    
-    def get_current_input(self) -> Optional[str]:
-        """Get the current input source from Yamaha receiver."""
-        if not self.current_renderer:
-            return None
-            
-        try:
-            # Get IP from renderer location
-            ip_match = re.search(r'http://([^:/]+)[:/]', self.current_renderer.location)
-            if not ip_match:
-                return None
-                
-            ip = ip_match.group(1)
-            
-            # URL for Yamaha control API
-            url = f'http://{ip}/YamahaRemoteControl/ctrl'
-            
-            # XML payload to get current input
-            payload = '''
-            <YAMAHA_AV cmd="GET">
-                <Main_Zone>
-                    <Input>
-                        <Input_Sel>GetParam</Input_Sel>
-                    </Input>
-                </Main_Zone>
-            </YAMAHA_AV>
-            '''
-            
-            # Send the command with a short timeout
-            response = requests.post(url, data=payload, timeout=1)
-            
-            if response.status_code == 200:
-                # Parse XML response to get current input
-                xml = ElementTree.fromstring(response.content)
-                input_sel = xml.find('.//Input_Sel')
-                if input_sel is not None:
-                    return input_sel.text
-                    
-            return None
-                
-        except requests.exceptions.Timeout:
-            logger.debug("Timeout getting current input")
-            return None
-        except requests.exceptions.RequestException as e:
-            logger.debug(f"Network error getting current input: {e}")
-            return None
-        except Exception as e:
-            logger.debug(f"Error getting current input: {e}")
-            return None
-    
-    def power_on(self, ip: str) -> bool:
-        """
-        Send power on command to the Yamaha receiver.
+    def get_receiver_status(self) -> Dict[str, Any]:
+        """Get current status of the receiver."""
+        if self.receiver:
+            return self.receiver.get_status()
+        return {}
         
-        Args:
-            ip: IP address of the receiver
-            
-        Returns:
-            bool: True if successful, False otherwise
-        """
-        try:
-            # URL for Yamaha receiver control
-            url = f'http://{ip}/YamahaRemoteControl/ctrl'
-            
-            # XML payload for power on
-            payload = '''
-            <YAMAHA_AV cmd="PUT">
-                <Main_Zone>
-                    <Power_Control>
-                        <Power>On</Power>
-                    </Power_Control>
-                </Main_Zone>
-            </YAMAHA_AV>
-            '''
-            
-            # Send the command
-            response = requests.post(url, data=payload, timeout=5)
-            
-            if response.status_code == 200:
-                logger.info(f"Successfully sent power on command to {ip}")
-                return True
-            else:
-                logger.error(f"Failed to send power on command. Status code: {response.status_code}")
-                return False
-                
-        except Exception as e:
-            logger.error(f"Error powering on device: {e}")
-            return False
-    
-    def power_off(self, ip: str) -> bool:
-        """
-        Send power off command to the Yamaha receiver.
+    def set_receiver_power(self, power: bool) -> bool:
+        """Control receiver power."""
+        if self.receiver:
+            return self.receiver.set_power(power)
+        return False
         
-        Args:
-            ip: IP address of the receiver
-            
-        Returns:
-            bool: True if successful, False otherwise
-        """
-        try:
-            # Try to stop playback first
-            try:
-                self.stop()
-            except:
-                pass
-            
-            # URL for Yamaha receiver control
-            url = f'http://{ip}/YamahaRemoteControl/ctrl'
-            
-            # XML payload for power off
-            payload = '''
-            <YAMAHA_AV cmd="PUT">
-                <Main_Zone>
-                    <Power_Control>
-                        <Power>Standby</Power>
-                    </Power_Control>
-                </Main_Zone>
-            </YAMAHA_AV>
-            '''
-            
-            # Send the command
-            response = requests.post(url, data=payload, timeout=5)
-            
-            if response.status_code == 200:
-                logger.info(f"Successfully sent power off command to {ip}")
-                return True
-            else:
-                logger.error(f"Failed to send power off command. Status code: {response.status_code}")
-                return False
-                
-        except Exception as e:
-            logger.error(f"Error powering off device: {e}")
-            return False
+    def set_receiver_volume(self, volume: int) -> bool:
+        """Set receiver volume (0-100)."""
+        if self.receiver:
+            return bool(self.receiver.set_volume(volume))
+        return False
+        
+    def set_receiver_input(self, input_source: str) -> bool:
+        """Set receiver input source."""
+        if self.receiver:
+            return self.receiver.set_input(input_source)
+        return False
+        
+    def get_receiver_inputs(self) -> List[str]:
+        """Get list of available receiver inputs."""
+        if self.receiver:
+            return self.receiver.get_input_list()
+        return []
+        
+    def set_receiver_mute(self, mute: bool) -> bool:
+        """Set receiver mute state."""
+        if self.receiver:
+            return self.receiver.set_mute(mute)
+        return False
     
-    def browse_container(self, container_id: str) -> List[Dict]:
-        """
-        Browse a container on the media server.
+    def browse_container(self, container_id: str) -> Optional[List[Dict[str, Any]]]:
+        """Browse a container on the current media server.
         
         Args:
             container_id: ID of the container to browse
             
         Returns:
-            List of items in the container, each item being a dictionary with:
-            - id: Item ID
-            - title: Item title
-            - type: 'container' for folders or 'item' for files
-            - url: URL for media items (None for containers)
+            List of items in the container, each item being a dict with:
+                - id: Item ID
+                - title: Item title
+                - type: 'container' or 'item'
+                - url: URL for items (None for containers)
         """
         if not self.current_server:
-            logger.error("No media server selected")
-            return []
+            logger.warning("No media server selected")
+            return None
             
         try:
-            # Find the ContentDirectory service
-            content_directory = next(
-                (service for service in self.current_server.services 
-                 if 'ContentDirectory' in service.service_type),
-                None
-            )
-            
+            content_directory = self.current_server.content_directory
             if not content_directory:
-                logger.error("ContentDirectory service not found")
-                return []
-            
+                logger.error("No content directory service available")
+                return None
+                
             # Browse the container
             result = content_directory.Browse(
                 ObjectID=container_id,
                 BrowseFlag='BrowseDirectChildren',
                 Filter='*',
                 StartingIndex=0,
-                RequestedCount=1000,
+                RequestedCount=0,
                 SortCriteria=''
             )
             
-            # Parse the DIDL-Lite XML response
-            if not result or 'Result' not in result:
-                logger.error("Invalid browse result")
-                return []
+            if not result:
+                logger.warning(f"No results from browsing container {container_id}")
+                return None
                 
-            try:
-                didl = ElementTree.fromstring(result['Result'])
-            except ElementTree.ParseError as e:
-                logger.error(f"Error parsing DIDL-Lite: {e}")
-                return []
+            # Parse DIDL-Lite XML
+            from xml.etree import ElementTree as ET
+            didl = result['Result']
+            root = ET.fromstring(didl)
             
-            # Extract items from the DIDL-Lite response
+            # Define namespace mapping
+            ns = {
+                'didl': 'urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/',
+                'upnp': 'urn:schemas-upnp-org:metadata-1-0/upnp/',
+                'dc': 'http://purl.org/dc/elements/1.1/'
+            }
+            
             items = []
-            for element in didl:
+            for item in root.findall('.//didl:item', ns) + root.findall('.//didl:container', ns):
                 try:
-                    item = {}
+                    item_id = item.get('id')
+                    title = item.find('dc:title', ns)
+                    title_text = title.text if title is not None else 'Unknown'
                     
-                    # Get item type
-                    if element.tag.endswith('container'):
-                        item['type'] = 'container'
-                        item['id'] = element.get('id', '')
-                    else:
-                        item['type'] = 'item'
-                        item['id'] = element.get('id', '')
-                        # Get media URL for items
-                        res = element.find('.//{*}res')
+                    # Determine if it's a container or item
+                    is_container = item.tag.endswith('container')
+                    
+                    item_dict = {
+                        'id': item_id,
+                        'title': title_text,
+                        'type': 'container' if is_container else 'item'
+                    }
+                    
+                    # For items, get the resource URL
+                    if not is_container:
+                        res = item.find('didl:res', ns)
                         if res is not None:
-                            item['url'] = res.text
+                            item_dict['url'] = res.text
                     
-                    # Get common metadata
-                    title = element.find('.//{*}title')
-                    if title is not None:
-                        item['title'] = title.text
-                    else:
-                        item['title'] = 'Unknown'
-                    
-                    items.append(item)
+                    items.append(item_dict)
                 except Exception as e:
-                    logger.error(f"Error processing DIDL-Lite item: {e}")
+                    logger.error(f"Error parsing item: {e}")
                     continue
             
             return items
             
         except Exception as e:
-            logger.error(f"Error browsing container: {e}", exc_info=True)
-            return []
-    
-    def set_yamaha_receiver(self, ip_address: str) -> bool:
-        """
-        Set up the Yamaha receiver controller.
-        
-        Args:
-            ip_address: IP address of the Yamaha receiver
-            
-        Returns:
-            bool: True if successful, False otherwise
-        """
-        try:
-            from .yamaha_controller import YamahaController
-            self.receiver = YamahaController(ip_address)
-            status = self.receiver.get_status()
-            return bool(status)
-        except Exception as e:
-            logger.error(f"Failed to set up Yamaha receiver: {e}")
-            self.receiver = None
-            return False
-            
-    def get_yamaha_status(self) -> Dict[str, Any]:
-        """Get current status of the Yamaha receiver."""
-        if self.receiver:
-            return self.receiver.get_status()
-        return {}
-        
-    def set_yamaha_power(self, power: bool) -> bool:
-        """Control Yamaha receiver power."""
-        if self.receiver:
-            return self.receiver.set_power(power)
-        return False
-        
-    def set_yamaha_volume(self, volume: int) -> bool:
-        """Set Yamaha receiver volume (0-100)."""
-        if self.receiver:
-            return bool(self.receiver.set_volume(volume))
-        return False
-        
-    def set_yamaha_input(self, input_source: str) -> bool:
-        """Set Yamaha receiver input source."""
-        if self.receiver:
-            return self.receiver.set_input(input_source)
-        return False
-        
-    def get_yamaha_inputs(self) -> List[str]:
-        """Get list of available Yamaha receiver inputs."""
-        if self.receiver:
-            return self.receiver.get_input_list()
-        return []
-        
-    def set_yamaha_mute(self, mute: bool) -> bool:
-        """Set Yamaha receiver mute state."""
-        if self.receiver:
-            return self.receiver.set_mute(mute)
-        return False
+            logger.error(f"Error browsing container: {e}")
+            return None
