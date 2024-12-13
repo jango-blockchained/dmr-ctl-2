@@ -14,6 +14,7 @@ class DeviceDict(TypedDict):
     device_type: str
 
 class StoredData(TypedDict):
+    """Type definition for stored device data including servers and renderers."""
     servers: List[DeviceDict]
     renderers: List[DeviceDict]
     timestamp: str
@@ -36,7 +37,7 @@ class DeviceStorage:
             for field in required_fields
         )
 
-    def save_devices(self, servers: List[Dict], renderers: List[Dict]) -> bool:
+    def save_devices(self, servers: List[DeviceDict], renderers: List[DeviceDict]) -> bool:
         """Save discovered devices to storage.
         
         Args:
@@ -77,9 +78,9 @@ class DeviceStorage:
         try:
             if not self.devices_file.exists():
                 return [], []
-                
+            
             with self.devices_file.open('r') as f:
-                data = json.load(f)
+                data: StoredData = json.load(f)
             
             # Validate loaded data
             servers = data.get("servers", [])
